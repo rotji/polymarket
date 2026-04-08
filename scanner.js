@@ -4,6 +4,11 @@ import { analyzeTimeDecay } from "./timeDecayEngine.js";
 import { analyzeCrossMarketArb } from "./crossMarketArbEngine.js";
 import { analyzeEventDependency } from "./eventDependencyEngine.js";
 import { analyzeLiquidityVacuum } from "./liquidityVacuumEngine.js";
+import { classifyMarketStructure, MarketStructureType } from "./marketStructureClassifier.js";
+import { computeConfidenceScore, scoreSignals } from "./confidenceScoringEngine.js";
+import { analyzeVolatilityCompression } from "./volatilityCompressionEngine.js";
+import { analyzeSentimentImbalance } from "./sentimentImbalanceEngine.js";
+import { fetchOrderbooksForMarkets } from "./orderbookFetcher.js";
 // ============================================================
 //  POLYMARKET STRUCTURAL SCANNER — STRICT VERSION
 //  Save as: scanner.js
@@ -25,8 +30,8 @@ import { analyzeLiquidityVacuum } from "./liquidityVacuumEngine.js";
 import fetch from "node-fetch";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
-const TAG_ID_CRYPTO = 21;
-const EVENT_LIMIT = 40;
+// Removed TAG_ID_CRYPTO to allow all categories
+const EVENT_LIMIT = 200;
 
 // ============================================================
 //  HELPERS
@@ -175,109 +180,48 @@ function stage1(markets) {
 
 function stage2(markets, title) {
   const rows = buildProbRows(markets);
-  const questions = rows.map((r) => r.question.toLowerCase());
-  const joined = `${title} ${questions.join(" | ")}`.toLowerCase();
-
-  const thresholdHints = [
-    "above",
-    "below",
-    "reach",
-    "hit",
-    "over",
-    "under",
-    "dip to",
-    "launch by",
-    "fdv above",
-    "by december",
-    "by 2026",
-    "by 2027",
-    "before 2027",
-    "before 2026",
-  ];
-
-  const exactHints = [
-    "temperature",
-    "highest temperature",
-    "rainfall",
-    "snowfall",
-    "wind speed",
-    "price on",
-    "price april",
-    "price on april",
-    "what price on",
-    "between",
-    "from",
-    "to",
-    "one day after launch",
-  ];
-
-  const categoricalHints = [
-    "best performance",
-    "vs.",
-    "vs ",
-    "which",
-    "who will",
-    "winner",
-    "best month",
-    "first",
-    "second",
-    "third",
-  ];
-
-  const thresholdScore = questions.filter((q) => hasAny(q, thresholdHints)).length;
-  const exactScore = questions.filter((q) => hasAny(q, exactHints)).length;
-  const categoricalScore = questions.filter((q) => hasAny(q, categoricalHints)).length;
-
-  if (rows.length === 1) {
-    return {
-      type: "BINARY",
-      label: "Binary decision",
-      markets,
-      rows,
-    };
+  // Use the new classifier
+  const structureType = classifyMarketStructure({ title, outcomes: markets[0]?.outcomes || [], question: markets[0]?.question });
+  let type = "BINARY";
+  let label = "Binary decision";
+  switch (structureType) {
+    case MarketStructureType.BINARY:
+      type = "BINARY";
+      label = "Binary decision";
+      break;
+    case MarketStructureType.TIMING_BUCKET:
+      type = "TIMING_BUCKET";
+      label = "Timing bucket";
+      break;
+    case MarketStructureType.EXACT_RANGE:
+      type = "EXACT_BUCKET";
+      label = "Exact bucket / range ladder";
+      break;
+    case MarketStructureType.THRESHOLD_LADDER:
+      type = "THRESHOLD_LADDER";
+      label = "Threshold ladder (cumulative)";
+      break;
+    case MarketStructureType.RANKING:
+      type = "CATEGORICAL";
+      label = "Ranking / categorical";
+      break;
+    case MarketStructureType.INDICATOR:
+      type = "THRESHOLD_LADDER";
+      label = "Indicator threshold ladder";
+      break;
+    case MarketStructureType.DEPENDENCY:
+      type = "DEPENDENCY";
+      label = "Dependency candidate";
+      break;
+    default:
+      type = "BINARY";
+      label = "Binary decision";
   }
-
-  if (categoricalScore >= Math.ceil(rows.length * 0.5) || hasAny(joined, categoricalHints)) {
-    return {
-      type: "CATEGORICAL",
-      label: "Categorical multi-outcome",
-      markets,
-      rows,
-    };
-  }
-
-  if (rows.length >= 3 && thresholdScore >= Math.ceil(rows.length * 0.5)) {
-    return {
-      type: "THRESHOLD_LADDER",
-      label: "Threshold ladder (cumulative)",
-      markets,
-      rows,
-    };
-  }
-
-  if (rows.length >= 3 && exactScore >= Math.ceil(rows.length * 0.3)) {
-    return {
-      type: "EXACT_BUCKET",
-      label: "Exact bucket / range ladder",
-      markets,
-      rows: sortRowsAscending(rows),
-    };
-  }
-
-  if (rows.length >= 3) {
-    return {
-      type: "CATEGORICAL",
-      label: "Categorical / unclear multi-outcome",
-      markets,
-      rows,
-    };
-  }
-
   return {
-    type: "BINARY",
-    label: "Binary decision",
+    type,
+    label,
     markets,
-    rows,
+    rows: sortRowsAscending(rows),
   };
 }
 
@@ -638,7 +582,7 @@ function printResult(result) {
 async function fetchMarkets() {
   const url =
     `${GAMMA_API}/events?active=true&closed=false` +
-    `&tag_id=${TAG_ID_CRYPTO}&limit=${EVENT_LIMIT}&order=volume&ascending=false`;
+    `&limit=${EVENT_LIMIT}&order=volume&ascending=false`;
 
   const res = await fetch(url);
   if (!res.ok) {
@@ -663,6 +607,7 @@ async function main() {
 
   console.log("Fetching live markets from Polymarket...");
 
+
   let events;
   try {
     events = await fetchMarkets();
@@ -672,21 +617,50 @@ async function main() {
     process.exit(1);
   }
 
+  // Gather all markets for orderbook fetch
+  const allMarkets = events.flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+  // Fetch orderbooks for all markets (throttled)
+  const orderbookMap = await fetchOrderbooksForMarkets(allMarkets, 5);
+  // Merge orderbook info into each market
+  for (const event of events) {
+    if (!event.markets) continue;
+    for (const market of event.markets) {
+      const ob = orderbookMap[market.id];
+      if (ob && ob.outcomes) {
+        // Attach bestBid/bestAsk to each outcome if available
+        for (let i = 0; i < (market.outcomes?.length || 0); ++i) {
+          if (ob.outcomes[i]) {
+            market.outcomes[i].bestBid = ob.outcomes[i].bestBid;
+            market.outcomes[i].bestAsk = ob.outcomes[i].bestAsk;
+          }
+        }
+      }
+    }
+  }
+
   console.log(`Fetched ${events.length} events. Running strict engine...\n`);
   console.log(line());
   console.log("");
 
-  const results = events.map(runEngine);
 
-  const trades = results.filter((r) => r.action === "TRADE");
-  const watchlist = results.filter((r) => r.action === "WATCHLIST");
+
+  // Run engine and score/sort signals
+  const results = events.map(runEngine);
+  let trades = results.filter((r) => r.action === "TRADE");
+  let watchlist = results.filter((r) => r.action === "WATCHLIST");
   const avoids = results.filter((r) => r.action === "AVOID");
+
+  trades = scoreSignals(trades).sort((a, b) => b.confidenceScore - a.confidenceScore);
+  watchlist = scoreSignals(watchlist).sort((a, b) => b.confidenceScore - a.confidenceScore);
 
   if (trades.length > 0) {
     console.log("\x1b[32mTRADE SIGNALS\x1b[0m");
     console.log(line());
     console.log("");
-    trades.forEach(printResult);
+    trades.forEach((r) => {
+      printResult(r);
+      console.log(`         \x1b[36mConfidence Score: ${r.confidenceScore}\x1b[0m\n`);
+    });
   } else {
     console.log("\x1b[90mNo TRADE signals found in this scan.\x1b[0m\n");
   }
@@ -695,7 +669,10 @@ async function main() {
     console.log("\x1b[33mWATCHLIST\x1b[0m");
     console.log(line());
     console.log("");
-    watchlist.forEach(printResult);
+    watchlist.forEach((r) => {
+      printResult(r);
+      console.log(`         \x1b[36mConfidence Score: ${r.confidenceScore}\x1b[0m\n`);
+    });
   } else {
     console.log("\x1b[90mNo WATCHLIST markets found in this scan.\x1b[0m\n");
   }
@@ -738,7 +715,8 @@ async function main() {
   }
 
   // Liquidity vacuum distortion detection (post-processing, does not override other engines)
-  const liquiditySignals = analyzeLiquidityVacuum(events);
+  // Pass all markets with orderbook info
+  const liquiditySignals = analyzeLiquidityVacuum(allMarkets);
   if (liquiditySignals.length > 0) {
     console.log("\x1b[34mLIQUIDITY VACUUM DISTORTION SIGNALS\x1b[0m");
     console.log(line());
@@ -756,6 +734,53 @@ async function main() {
     }
   } else {
     console.log("\x1b[90mNo liquidity vacuum distortion signals found.\x1b[0m\n");
+  }
+
+  // Volatility compression detection (post-processing)
+  let foundVolCompression = false;
+  for (const event of events) {
+    if (!event.markets) continue;
+    for (const market of event.markets) {
+      const result = analyzeVolatilityCompression(market);
+      if (result.signals && result.signals.length > 0) {
+        if (!foundVolCompression) {
+          console.log("\x1b[35mVOLATILITY COMPRESSION SIGNALS\x1b[0m");
+          console.log(line());
+          foundVolCompression = true;
+        }
+        for (const sig of result.signals) {
+          console.log(`  Market: ${market.title || market.question}`);
+          console.log(`    Outcome: ${sig.outcome}`);
+          console.log(`    ${sig.message}`);
+        }
+      }
+    }
+  }
+  if (!foundVolCompression) {
+    console.log("\x1b[90mNo volatility compression signals found.\x1b[0m\n");
+  }
+
+  // Sentiment imbalance detection (Algorithm 8)
+  const sentimentSignals = analyzeSentimentImbalance(events);
+  if (sentimentSignals.length > 0) {
+    console.log("\x1b[36mSENTIMENT IMBALANCE SIGNALS\x1b[0m");
+    console.log(line());
+    for (const sig of sentimentSignals) {
+      console.log(`  Market: ${sig.marketTitle}`);
+      console.log(`    ${sig.message}`);
+      if (sig.ladder && sig.ladder.length > 0) {
+        console.log("    Ladder:");
+        for (const q of sig.ladder) {
+          console.log(`      - ${q}`);
+        }
+      }
+      if (sig.details && sig.details.probs) {
+        console.log(`    Probabilities: ${sig.details.probs.map(p => (p*100).toFixed(1)+"%").join(", ")}`);
+      }
+      console.log("");
+    }
+  } else {
+    console.log("\x1b[90mNo sentiment imbalance signals found.\x1b[0m\n");
   }
 
   console.log(line("═"));
