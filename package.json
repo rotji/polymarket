@@ -1,14 +1,23 @@
 {
   "type": "module",
-  "dependencies": {
-    "node-fetch": "^3.3.2"
-  },
   "name": "polymarket",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "devDependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "node-fetch": "^3.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  },
   "scripts": {
+    "start:polymarket": "npx ts-node src/app/scanner.ts --exchange=polymarket",
+    "start:kalshi": "npx ts-node src/app/scanner.ts --exchange=kalshi",
+    "start:manifold": "npx ts-node src/app/scanner.ts --exchange=manifold",
+    "start:stocks": "npx ts-node src/app/scanner.ts --exchange=stocks",
+    "start:currencies": "npx ts-node src/app/scanner.ts --exchange=currencies",
+    "start:bonds": "npx ts-node src/app/scanner.ts --exchange=bonds",
+    "start": "npx ts-node src/app/scanner.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

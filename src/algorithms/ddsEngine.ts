@@ -1,7 +1,5 @@
-// ddsEngine.js
 // DDS spike detection for exact bucket/range markets
-
-function analyzeDDS(structure) {
+export function analyzeDDS(structure: any) {
   const { rows } = structure;
   if (rows.length < 3) {
     return {
@@ -11,7 +9,7 @@ function analyzeDDS(structure) {
       reason: `Only ${rows.length} bracket(s) — need 3+ for DDS`,
     };
   }
-  const yesVals = rows.map((r) => r.yes);
+  const yesVals = rows.map((r: any) => r.yes);
   const maxVal = Math.max(...yesVals);
   const maxIdx = yesVals.indexOf(maxVal);
   const neighbors = [];
@@ -59,5 +57,3 @@ function analyzeDDS(structure) {
     reason: `No structural distortion — DDS ${dds.toFixed(2)} below 2.50`,
   };
 }
-
-export { analyzeDDS };

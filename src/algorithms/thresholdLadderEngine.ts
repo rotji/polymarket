@@ -1,20 +1,10 @@
-// thresholdLadderEngine.js
-// Engine for analyzing threshold ladder markets on Polymarket
-// Exports analyzeThresholdLadder(markets, options) => [{ marketId, signals: [...] }]
-
-/**
- * Analyze threshold ladder markets for distortion or inefficiency signals.
- * @param {Object} market - The market object from Polymarket API
- * @param {Object} [options] - Optional config (e.g., thresholds)
- * @returns {Object} { marketId, signals: [...] }
- */
-export function analyzeThresholdLadder(market, options = {}) {
-  // Example: Detects if any threshold step is mispriced relative to neighbors
+// Engine for analyzing threshold ladder markets
+export function analyzeThresholdLadder(market: any, options: any = {}) {
   const signals = [];
   if (!market || !market.outcomes || !Array.isArray(market.outcomes)) return { marketId: market?.id, signals };
 
   const { outcomes } = market;
-  const defaultThreshold = 0.08; // Example: 8% deviation triggers signal
+  const defaultThreshold = 0.08;
   const threshold = options.threshold || defaultThreshold;
 
   for (let i = 1; i < outcomes.length - 1; i++) {
