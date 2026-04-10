@@ -1,3 +1,8 @@
+import type { CalendarEvent } from '../algorithms/anticipationAlgorithm.ts';
+import { analyzeAnticipationOpportunities } from '../algorithms/anticipationAlgorithm.ts';
+import type { EventGroup } from '../algorithms/anticipationAlgorithm.ts';
+import { buildUnifiedEventCalendar } from '../calendar/eventCalendarEngine.ts';
+import type { RawCalendarEvent } from '../calendar/eventCalendarEngine.ts';
 // Polymarket Structural Scanner — TypeScript Refactor
 import { analyzeDDS } from '../algorithms/ddsEngine.ts';
 import { analyzeThresholdLadder } from '../algorithms/thresholdLadderEngine.ts';
@@ -10,6 +15,8 @@ import { analyzeSentimentImbalance } from '../algorithms/sentimentImbalanceEngin
 import { computeConfidenceScore, scoreSignals } from '../algorithms/confidenceScoringEngine.ts';
 import { fetchOrderbooksForMarkets } from '../connectors/polymarket/fetchOrderbooks.ts';
 import { classifyMarketStructure, MarketStructureType } from '../classifiers/marketStructureClassifier.ts';
+
+import { POLYMARKET_API, KALSHI_API, MANIFOLD_API, STOCKS_API, CURRENCIES_API, BONDS_API, ORDERBOOK_THROTTLE, EVENT_LIMIT, DEBUG } from '../env.ts';
 import fetch from 'node-fetch';
 
 
@@ -470,9 +477,7 @@ function printResult(result: any): void {
 // Fetchers for each exchange (Polymarket implemented, others placeholder)
 // =====================
 async function fetchPolymarketEvents(): Promise<any[]> {
-	const GAMMA_API = 'https://gamma-api.polymarket.com';
-	const EVENT_LIMIT = 200;
-	const url = `${GAMMA_API}/events?active=true&closed=false&limit=${EVENT_LIMIT}&order=volume&ascending=false`;
+	const url = `${POLYMARKET_API}/events?active=true&closed=false&limit=${EVENT_LIMIT}&order=volume&ascending=false`;
 	const res = await fetch(url);
 	if (!res.ok) throw new Error(`Gamma API returned ${res.status}`);
 	const data = await res.json();
@@ -538,7 +543,7 @@ async function main() {
 	if (exchange === 'polymarket') {
 		allMarkets = events.flatMap(e => Array.isArray(e.markets) ? e.markets : []);
 		// Fetch orderbooks for all markets (throttled)
-		const orderbookMap = await fetchOrderbooksForMarkets(allMarkets, 5);
+		const orderbookMap = await fetchOrderbooksForMarkets(allMarkets, ORDERBOOK_THROTTLE);
 		// Merge orderbook info into each market
 		for (const event of events) {
 			if (!event.markets) continue;
@@ -560,6 +565,7 @@ async function main() {
 	console.log(line());
 	console.log('');
 
+
 	// Run engine and score/sort signals
 	const results = events.map(runEngine);
 	let trades = results.filter((r) => r.action === 'TRADE');
@@ -568,6 +574,57 @@ async function main() {
 
 	trades = scoreSignals(trades).sort((a, b) => b.confidenceScore - a.confidenceScore);
 	watchlist = scoreSignals(watchlist).sort((a, b) => b.confidenceScore - a.confidenceScore);
+
+	// --- Anticipation Algorithm Integration (Advanced) ---
+
+	// --- Fetch unified event calendar (automatic, from all sources) ---
+	const rawCalendar: RawCalendarEvent[] = await buildUnifiedEventCalendar();
+	// Optionally map RawCalendarEvent to CalendarEvent if needed (they are compatible)
+	const calendar: CalendarEvent[] = rawCalendar;
+
+	// Normalize events to EventGroup[] for anticipation algorithm
+	const eventGroups: EventGroup[] = events.map((e: any, idx: number) => ({
+		id: e.id || `event_${idx}`,
+		title: e.title || e.question || `Event ${idx + 1}`,
+		tags: e.tags || inferTagsFromTitle(e.title || e.question || ''),
+		markets: Array.isArray(e.markets) ? e.markets.map((m: any, mIdx: number) => ({
+			id: m.id || `market_${mIdx}`,
+			question: m.question || m.title || `Market ${mIdx + 1}`,
+			title: m.title || m.question || `Market ${mIdx + 1}`,
+			resolutionDate: m.resolutionDate || m.endDate || '',
+			outcomes: Array.isArray(m.outcomes) ? m.outcomes.map((o: any) => ({
+				price: typeof o.price === 'number' ? o.price : parseFloat(o.price),
+				history: o.history || []
+			})) : [],
+			volume: m.volume,
+			tags: m.tags || inferTagsFromTitle(m.question || m.title || '')
+		})) : []
+	}));
+
+	// Run anticipation algorithm
+	const anticipationResults = analyzeAnticipationOpportunities(eventGroups, calendar, { anticipationWindowDays: 10, debug: false });
+	if (anticipationResults.length > 0) {
+		console.log('\x1b[35mANTICIPATION WATCHLIST\x1b[0m');
+		console.log(line());
+		anticipationResults.forEach((r) => {
+			console.log(`  [${r.priority}] Score: ${r.score} | Event: ${r.calendarEvent}`);
+			console.log(`    Market: ${r.market}`);
+			console.log(`    Group: ${r.eventGroup}`);
+			console.log(`    Days to event: ${r.daysToEvent}`);
+			console.log(`    Reason: ${r.reason}`);
+			console.log('');
+		});
+	} else {
+		console.log('\x1b[90mNo anticipation watchlist signals found.\x1b[0m\n');
+	}
+
+// --- Helper to infer tags from title/question (simple keyword extraction) ---
+function inferTagsFromTitle(title: string): string[] {
+	if (!title) return [];
+	const keywords = ['cpi', 'inflation', 'fed', 'rates', 'interest', 'election', 'weather', 'crypto', 'launch', 'unemployment', 'gdp', 'jobs', 'meeting'];
+	const lower = title.toLowerCase();
+	return keywords.filter(k => lower.includes(k));
+}
 
 	if (trades.length > 0) {
 		console.log('\x1b[32mTRADE SIGNALS\x1b[0m');
