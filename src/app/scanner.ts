@@ -15,6 +15,7 @@ import { analyzeSentimentImbalance } from '../algorithms/sentimentImbalanceEngin
 import { computeConfidenceScore, scoreSignals } from '../algorithms/confidenceScoringEngine.ts';
 import { fetchOrderbooksForMarkets } from '../connectors/polymarket/fetchOrderbooks.ts';
 import { classifyMarketStructure, MarketStructureType } from '../classifiers/marketStructureClassifier.ts';
+import { saveMarketSnapshot } from '../snapshot/snapshotEngine.ts';
 
 import { POLYMARKET_API, KALSHI_API, MANIFOLD_API, STOCKS_API, CURRENCIES_API, BONDS_API, ORDERBOOK_THROTTLE, EVENT_LIMIT, DEBUG } from '../env.ts';
 import fetch from 'node-fetch';
@@ -512,9 +513,28 @@ async function fetchKalshiEvents(): Promise<any[]> {
 	return Object.values(eventsMap);
 }
 async function fetchManifoldEvents(): Promise<any[]> {
-	// TODO: Implement Manifold API fetch
-	console.log('Manifold fetch not implemented yet.');
-	return [];
+	const url = `${MANIFOLD_API}/v0/markets`;
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`Manifold API returned ${res.status}`);
+	const data = await res.json();
+	if (!Array.isArray(data)) return [];
+
+	// Group markets by groupId if present, else by normalized question stem
+	const eventsMap: Record<string, any> = {};
+	for (const m of data) {
+		// Prefer groupId, else use normalized question stem
+		const groupId = m.groupId || (m.question ? m.question.replace(/\s+/g, ' ').toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 48) : 'ungrouped');
+		if (!eventsMap[groupId]) {
+			eventsMap[groupId] = {
+				id: groupId,
+				title: m.groupName || m.question || 'Untitled',
+				markets: [],
+				tags: m.tags || [],
+			};
+		}
+		eventsMap[groupId].markets.push(m);
+	}
+	return Object.values(eventsMap);
 }
 async function fetchStocksEvents(): Promise<any[]> {
 	// TODO: Implement Stocks API fetch
