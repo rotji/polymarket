@@ -20,7 +20,7 @@ import { saveMarketSnapshot } from '../snapshot/snapshotEngine.ts';
 import { POLYMARKET_API, KALSHI_API, MANIFOLD_API, STOCKS_API, CURRENCIES_API, BONDS_API, ORDERBOOK_THROTTLE, EVENT_LIMIT, DEBUG } from '../env.ts';
 import fetch from 'node-fetch';
 import { fetchKalshiMarkets } from '../exchange/kalshi.ts';
-
+import { fetchEvents as fetchKalshiEvents } from '../connectors/kalshi/fetchEvents.ts';
 
 // =====================
 // Argument Parsing
@@ -485,33 +485,34 @@ async function fetchPolymarketEvents(): Promise<any[]> {
 	const data = await res.json();
 	return Array.isArray(data) ? data : [];
 }
-async function fetchKalshiEvents(): Promise<any[]> {
-	// Fetch Kalshi markets and wrap as events
-	const markets = await fetchKalshiMarkets();
-	// Group by ticker root (event) if possible, otherwise treat each market as an event
-	const eventsMap: Record<string, any> = {};
-	for (const m of markets) {
-		// Use ticker root as event id (e.g., "INFLATION23_YES" -> "INFLATION23")
-		const eventId = m.ticker.split('_')[0];
-		if (!eventsMap[eventId]) {
-			eventsMap[eventId] = {
-				id: eventId,
-				title: m.title,
-				markets: [],
-				tags: [],
-			};
-		}
-		// Avoid duplicate id/title by spreading first, then explicitly setting
-		eventsMap[eventId].markets.push({
-			...m,
-			question: m.title,
-			outcomes: [], // Kalshi API v2 does not provide outcome prices directly
-			volume: 0,
-			tags: [],
-		});
-	}
-	return Object.values(eventsMap);
-}
+// const fetchKalshiEvents(): Promise<any[]> {
+// 	// Fetch Kalshi markets and wrap as events
+// 	const markets = await fetchKalshiMarkets();
+// 	// Group by ticker root (event) if possible, otherwise treat each market as an event
+// 	const eventsMap: Record<string, any> = {};
+// 	for (const m of markets) {
+// 		// Use ticker root as event id (e.g., "INFLATION23_YES" -> "INFLATION23")
+// 		const eventId = m.ticker.split('_')[0];
+// 		if (!eventsMap[eventId]) {
+// 			eventsMap[eventId] = {
+// 				id: eventId,
+// 				title: m.title,
+// 				markets: [],
+// 				tags: [],
+// 			};
+// 		}
+// 		// Avoid duplicate id/title by spreading first, then explicitly setting
+// 		eventsMap[eventId].markets.push({
+// 			...m,
+// 			question: m.title,
+// 			outcomes: [], // Kalshi API v2 does not provide outcome prices directly
+// 			volume: 0,
+// 			tags: [],
+// 		});
+// 	}
+// 	return Object.values(eventsMap);
+// }
+// fetchKalshiEvents is now imported directly from the connector, matching the modular pattern.
 async function fetchManifoldEvents(): Promise<any[]> {
 	const url = `${MANIFOLD_API}/v0/markets`;
 	const res = await fetch(url);
