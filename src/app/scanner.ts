@@ -619,6 +619,19 @@ async function main() {
 	trades = scoreSignals(trades).sort((a, b) => b.confidenceScore - a.confidenceScore);
 	watchlist = scoreSignals(watchlist).sort((a, b) => b.confidenceScore - a.confidenceScore);
 
+	// Save a snapshot for each detected trade
+	const now = Date.now();
+	for (const trade of trades) {
+		if (trade && trade.execution && trade.execution.entryRaw !== undefined) {
+			saveMarketSnapshot({
+				timestamp: now,
+				exchange,
+				marketId: trade.execution.marketId || trade.id || 'unknown',
+				data: trade
+			});
+		}
+	}
+
 	// --- Anticipation Algorithm Integration (Advanced) ---
 
 	// --- Fetch unified event calendar (automatic, from all sources) ---
