@@ -1,5 +1,5 @@
 // Normalize Polymarket raw data to universal market format
-import { NormalizedMarket } from '../types/market';
+import type { NormalizedMarket } from '../types/market';
 
 export function normalizePolymarket(raw: any): NormalizedMarket {
   // TODO: Implement normalization logic
