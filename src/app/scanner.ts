@@ -18,6 +18,17 @@ import { fetchOrderbooksForMarkets } from '../connectors/polymarket/fetchOrderbo
 import { classifyMarketStructure, MarketStructureType } from '../classifiers/marketStructureClassifier.ts';
 import { saveMarketSnapshot } from '../snapshot/snapshotEngine.ts';
 
+// Minimal HTTP server for Render Web Service
+import http from 'http';
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+	res.writeHead(200, { 'Content-Type': 'text/plain' });
+	res.end('OK');
+}).listen(PORT, () => {
+	if (process.env.DEBUG) {
+		console.log(`HTTP server listening on port ${PORT}`);
+	}
+});
 import { POLYMARKET_API, KALSHI_API, MANIFOLD_API, STOCKS_API, CURRENCIES_API, BONDS_API, ORDERBOOK_THROTTLE, EVENT_LIMIT, DEBUG } from '../env.ts';
 import fetch from 'node-fetch';
 import { fetchKalshiMarkets } from '../exchange/kalshi.ts';
