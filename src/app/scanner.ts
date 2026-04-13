@@ -1,3 +1,4 @@
+// Test sync: harmless comment for dual-remote push verification
 import type { CalendarEvent } from '../algorithms/anticipationAlgorithm.ts';
 import { analyzeAnticipationOpportunities } from '../algorithms/anticipationAlgorithm.ts';
 import type { EventGroup } from '../algorithms/anticipationAlgorithm.ts';
