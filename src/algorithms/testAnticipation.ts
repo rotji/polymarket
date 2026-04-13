@@ -4,35 +4,40 @@ import { analyzeAnticipationOpportunities } from './anticipationAlgorithm.ts';
 // Example normalized events data (mock)
 const events = [
   {
+    id: 'event1',
     title: 'CPI April 2026',
     markets: [
       {
+        id: 'market1',
         question: 'Will CPI exceed 3.5% in April?',
         resolutionDate: '2026-04-15T12:30:00Z',
         outcomes: [
-          { name: 'Yes', price: '0.51' },
-          { name: 'No', price: '0.49' }
+          { name: 'Yes', price: 0.51 },
+          { name: 'No', price: 0.49 }
         ]
       },
       {
+        id: 'market2',
         question: 'Will CPI exceed 4.0% in April?',
         resolutionDate: '2026-04-15T12:30:00Z',
         outcomes: [
-          { name: 'Yes', price: '0.50' },
-          { name: 'No', price: '0.50' }
+          { name: 'Yes', price: 0.50 },
+          { name: 'No', price: 0.50 }
         ]
       }
     ]
   },
   {
+    id: 'event2',
     title: 'Fed Meeting April 2026',
     markets: [
       {
+        id: 'market3',
         question: 'Will the Fed raise rates in April?',
         resolutionDate: '2026-04-20T18:00:00Z',
         outcomes: [
-          { name: 'Yes', price: '0.52' },
-          { name: 'No', price: '0.48' }
+          { name: 'Yes', price: 0.52 },
+          { name: 'No', price: 0.48 }
         ]
       }
     ]

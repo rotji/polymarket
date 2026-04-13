@@ -1,6 +1,6 @@
 // Engine for analyzing threshold ladder markets
 export function analyzeThresholdLadder(market: any, options: any = {}) {
-  const signals = [];
+  const signals: any[] = [];
   if (!market || !market.outcomes || !Array.isArray(market.outcomes)) return { marketId: market?.id, signals };
 
   const { outcomes } = market;

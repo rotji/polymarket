@@ -33,5 +33,8 @@ export async function fetchKalshiMarkets(): Promise<KalshiMarket[]> {
   if (!res.ok) throw new Error(`Kalshi API error: ${res.status}`);
   const data = await res.json();
   // Kalshi returns { markets: [...] }
-  return data.markets as KalshiMarket[];
+  if (typeof data === 'object' && data !== null && 'markets' in data && Array.isArray((data as any).markets)) {
+    return (data as any).markets as KalshiMarket[];
+  }
+  return [];
 }

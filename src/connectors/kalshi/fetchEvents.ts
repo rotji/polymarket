@@ -9,5 +9,8 @@ export async function fetchEvents() {
   if (!res.ok) throw new Error(`Kalshi API error: ${res.status}`);
   const data = await res.json();
   // Normalize each Kalshi market to the universal format
-  return (data.markets || []).map(normalizeKalshi);
+  if (typeof data === 'object' && data !== null && 'markets' in data && Array.isArray((data as any).markets)) {
+    return ((data as any).markets).map(normalizeKalshi);
+  }
+  return [];
 }
