@@ -46,7 +46,7 @@ export interface EventGroup {
 }
 
 export interface AnticipationResult {
-  type: "ANTICIPATION_WATCHLIST"
+  type: "ANTICIPATION_TRADE" | "ANTICIPATION_WATCHLIST"
   score: number
   priority: "HIGH" | "MEDIUM" | "LOW"
   calendarEvent: string
@@ -54,6 +54,10 @@ export interface AnticipationResult {
   market: string
   daysToEvent: number
   reason: string
+  entryPrice?: number
+  direction?: string
+  tp?: number
+  sl?: number
 }
 
 interface Options {
@@ -67,67 +71,73 @@ export function analyzeAnticipationOpportunities(
   calendar: CalendarEvent[],
   options: Options = {}
 ): AnticipationResult[] {
-
-  const results: AnticipationResult[] = []
-
-  const anticipationWindowDays = options.anticipationWindowDays ?? 7
-  const stagnationThreshold = options.stagnationThreshold ?? 0.03
-  const debug = options.debug ?? false
-
-  const now = Date.now()
-  const windowEnd = now + anticipationWindowDays * 86400000
-
+  const results: AnticipationResult[] = [];
+  const anticipationWindowDays = options.anticipationWindowDays ?? 7;
+  const stagnationThreshold = options.stagnationThreshold ?? 0.03;
+  const debug = options.debug ?? false;
+  const now = Date.now();
+  const windowEnd = now + anticipationWindowDays * 86400000;
   const upcomingEvents = calendar.filter(
     (e) => e.timestamp > now && e.timestamp <= windowEnd
-  )
-
+  );
   for (const calEvent of upcomingEvents) {
-
     const daysToEvent = Math.round(
       (calEvent.timestamp - now) / 86400000
-    )
-
-    const importanceScore = getEventImportanceScore(calEvent.importance)
-
+    );
+    const importanceScore = getEventImportanceScore(calEvent.importance);
     for (const eventGroup of events) {
-
-      if (!isEventRelevant(eventGroup, calEvent)) continue
-
+      if (!isEventRelevant(eventGroup, calEvent)) continue;
       for (const market of eventGroup.markets) {
-
         const stagnationScore = detectMarketStagnation(
           market,
           stagnationThreshold
-        )
-
-        const proximityScore = calculateProximityScore(daysToEvent)
-
+        );
+        const proximityScore = calculateProximityScore(daysToEvent);
         const totalScore =
           importanceScore * 0.4 +
           stagnationScore * 0.4 +
-          proximityScore * 0.2
-
-        if (totalScore < 50) continue
-
-        results.push({
-          type: "ANTICIPATION_WATCHLIST",
-          score: Math.round(totalScore),
-          priority: getPriority(totalScore),
-          calendarEvent: calEvent.name,
-          eventGroup: eventGroup.title || eventGroup.id,
-          market: market.question || market.id,
-          daysToEvent,
-          reason: buildReason(calEvent, stagnationScore, proximityScore)
-        })
+          proximityScore * 0.2;
+        if (totalScore < 50) continue;
+        // Strict: Only very high-confidence signals become trades
+        if (totalScore >= 80 && stagnationScore >= 80 && proximityScore >= 60) {
+          // Recommend a trade: direction is BUY YES if stagnation, else BUY NO
+          const direction = 'BUY YES';
+          const entryPrice = market.outcomes && market.outcomes[0] ? market.outcomes[0].price : undefined;
+          const tp = entryPrice !== undefined ? Math.min(entryPrice * 1.7, entryPrice + 0.03, 0.85) : undefined;
+          const sl = entryPrice !== undefined ? Math.max(entryPrice * 0.55, 0.02, entryPrice - 0.02) : undefined;
+          results.push({
+            type: "ANTICIPATION_TRADE",
+            score: Math.round(totalScore),
+            priority: getPriority(totalScore),
+            calendarEvent: calEvent.name,
+            eventGroup: eventGroup.title || eventGroup.id,
+            market: market.question || market.id,
+            daysToEvent,
+            reason: buildReason(calEvent, stagnationScore, proximityScore),
+            entryPrice,
+            direction,
+            tp,
+            sl
+          });
+        } else {
+          results.push({
+            type: "ANTICIPATION_WATCHLIST",
+            score: Math.round(totalScore),
+            priority: getPriority(totalScore),
+            calendarEvent: calEvent.name,
+            eventGroup: eventGroup.title || eventGroup.id,
+            market: market.question || market.id,
+            daysToEvent,
+            reason: buildReason(calEvent, stagnationScore, proximityScore)
+          });
+        }
       }
     }
   }
-
   if (debug && results.length === 0) {
-    console.log("No anticipation signals detected.")
+    console.log("No anticipation signals detected.");
   }
-
-  return results.sort((a, b) => b.score - a.score)
+  return results.sort((a, b) => b.score - a.score);
 }
 
 
@@ -263,3 +273,6 @@ function buildReason(
 
   return `${stagnation} ahead of ${event.name} (${proximity})`
 }
+
+// --- Modular event-centric opportunity engine integration ---
+export { clusterMarketsByEvent, analyzeIntraExchangeOpportunities, analyzeCrossExchangeEventOpportunities } from './eventCentricEngine';

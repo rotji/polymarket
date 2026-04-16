@@ -2,7 +2,7 @@ import 'dotenv/config';
 // import { sendSms } from '../shared/sendSms';
 // Test sync: harmless comment for dual-remote push verification
 import type { CalendarEvent } from '../algorithms/anticipationAlgorithm';
-import { analyzeAnticipationOpportunities } from '../algorithms/anticipationAlgorithm';
+import { analyzeAnticipationOpportunities, clusterMarketsByEvent, analyzeIntraExchangeOpportunities, analyzeCrossExchangeEventOpportunities } from '../algorithms/anticipationAlgorithm';
 import type { EventGroup } from '../algorithms/anticipationAlgorithm';
 import { buildUnifiedEventCalendar } from '../calendar/eventCalendarEngine';
 import type { RawCalendarEvent } from '../calendar/eventCalendarEngine';
@@ -11,6 +11,7 @@ import { analyzeDDS } from '../algorithms/ddsEngine';
 import { analyzeThresholdLadder } from '../algorithms/thresholdLadderEngine';
 import { analyzeTimeDecay } from '../algorithms/timeDecayEngine';
 import { analyzeCrossMarketArb } from '../algorithms/crossMarketArbEngine';
+import { analyzeCrossExchangeArb } from '../algorithms/crossExchangeArbEngine';
 import { analyzeEventDependency } from '../algorithms/eventDependencyEngine';
 import { analyzeLiquidityVacuum } from '../algorithms/liquidityVacuumEngine';
 import { analyzeVolatilityCompression } from '../algorithms/volatilityCompressionEngine';
@@ -612,6 +613,48 @@ async function fetchBondsEvents(): Promise<any[]> {
 // Main
 // =====================
 async function main() {
+		// --- Fetch unified event calendar (automatic, from all sources) ---
+		const rawCalendar: RawCalendarEvent[] = await buildUnifiedEventCalendar();
+		const calendar: CalendarEvent[] = rawCalendar;
+
+		// --- Debug: Print only actionable upcoming events (with related markets) ---
+		// Gather all markets from all exchanges for event filtering
+		const exchangeMarkets: Record<string, any[]> = {
+			polymarket: (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+			manifold: (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+			// Add more exchanges here as needed
+		};
+
+		function eventHasRelatedMarket(ev: CalendarEvent): boolean {
+			const tags = (ev.tags || []).map(t => t.toLowerCase());
+			for (const ex in exchangeMarkets) {
+				for (const m of exchangeMarkets[ex]) {
+					const mTags = (m.tags || []).map((t: string) => t.toLowerCase());
+					const title = (m.title || m.question || '').toLowerCase();
+					if (
+						tags.some(tag => mTags.includes(tag)) ||
+						(tags.length > 0 && tags.some(tag => title.includes(tag))) ||
+						(ev.name && title.includes(ev.name.toLowerCase()))
+					) {
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		const actionableEvents = calendar.filter(eventHasRelatedMarket);
+		console.log('\x1b[34mUPCOMING EVENTS WITH RELATED MARKETS\x1b[0m');
+		console.log(line());
+		if (actionableEvents.length > 0) {
+			for (const ev of actionableEvents) {
+				const date = new Date(ev.timestamp).toISOString().slice(0, 16).replace('T', ' ');
+				console.log(`  ${date} | ${ev.name}${ev.type ? ' [' + ev.type + ']' : ''}${ev.importance ? ' (' + ev.importance + ')' : ''}${ev.tags && ev.tags.length > 0 ? ' | tags: ' + ev.tags.join(', ') : ''}`);
+			}
+		} else {
+			console.log('  No actionable upcoming events found.');
+		}
+		console.log('');
 	console.log('');
 	console.log(line('\u2550'));
 	console.log('  UNIVERSAL STRUCTURAL SCANNER');
@@ -636,6 +679,15 @@ async function main() {
 		console.error(`Unknown exchange: ${exchange}`);
 		process.exit(1);
 	}
+
+	// --- Cross-Exchange Arbitrage Integration ---
+	// Fetch and normalize markets from all supported exchanges
+	const allExchangesMarkets: Record<string, any[]> = {};
+	allExchangesMarkets['polymarket'] = (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	allExchangesMarkets['manifold'] = (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	// Add more exchanges here as needed
+
+	const crossExchangeArbSignals = analyzeCrossExchangeArb(allExchangesMarkets, { minDiff: 0.05 });
 
 	// Gather all markets for orderbook fetch (Polymarket only for now)
 	let allMarkets: any[] = [];
@@ -665,11 +717,41 @@ async function main() {
 	console.log('');
 
 
+
+
 	// Run engine and score/sort signals
 	const results = events.map(runEngine);
 	let trades = results.filter((r) => r.action === 'TRADE');
 	let watchlist = results.filter((r) => r.action === 'WATCHLIST');
 	const avoids = results.filter((r) => r.action === 'AVOID');
+
+	// Add cross-exchange arbitrage signals as TRADEs
+	if (crossExchangeArbSignals.length > 0) {
+		for (const sig of crossExchangeArbSignals) {
+			trades.push({
+				action: 'TRADE',
+				type: 'CROSS_EXCHANGE_ARB',
+				message: sig.message,
+				exchangeA: sig.exchangeA,
+				exchangeB: sig.exchangeB,
+				marketA: sig.marketA,
+				marketB: sig.marketB,
+				priceA: sig.priceA,
+				priceB: sig.priceB,
+				confidenceScore: 1 // or compute a score if desired
+			});
+		}
+		console.log('\x1b[35mCROSS-EXCHANGE ARBITRAGE SIGNALS (added to TRADE list)\x1b[0m');
+		console.log(line());
+		for (const sig of crossExchangeArbSignals) {
+			console.log(`  ${sig.message}`);
+			console.log(`    ${sig.exchangeA}: ${sig.marketA.question} (${(sig.priceA * 100).toFixed(1)}%)`);
+			console.log(`    ${sig.exchangeB}: ${sig.marketB.question} (${(sig.priceB * 100).toFixed(1)}%)`);
+			console.log('');
+		}
+	} else {
+		console.log('\x1b[90mNo cross-exchange arbitrage signals found.\x1b[0m\n');
+	}
 
 	trades = scoreSignals(trades).sort((a, b) => b.confidenceScore - a.confidenceScore);
 	watchlist = scoreSignals(watchlist).sort((a, b) => b.confidenceScore - a.confidenceScore);
@@ -689,10 +771,55 @@ async function main() {
 
 	// --- Anticipation Algorithm Integration (Advanced) ---
 
+
 	// --- Fetch unified event calendar (automatic, from all sources) ---
-	const rawCalendar: RawCalendarEvent[] = await buildUnifiedEventCalendar();
-	// Optionally map RawCalendarEvent to CalendarEvent if needed (they are compatible)
-	const calendar: CalendarEvent[] = rawCalendar;
+	// (already declared above)
+
+		// --- Event-Centric Opportunity Engine Integration ---
+		// 1. Gather all markets from all exchanges (already declared above)
+
+	// 2. Cluster markets by event
+	const eventClusters = clusterMarketsByEvent(calendar, exchangeMarkets);
+
+	// 3. Intra-exchange opportunities
+	const intraOpps = analyzeIntraExchangeOpportunities(eventClusters);
+	if (intraOpps.length > 0) {
+		console.log('\x1b[36mINTRA-EXCHANGE EVENT OPPORTUNITIES\x1b[0m');
+		console.log(line());
+		for (const opp of intraOpps) {
+			console.log(`  [${opp.exchange}] ${opp.event}: ${opp.details}`);
+			for (const m of opp.markets) {
+				console.log(`    - ${m.title || m.question}`);
+			}
+			console.log('');
+		}
+	} else {
+		console.log('\x1b[90mNo intra-exchange event opportunities found.\x1b[0m\n');
+	}
+
+	// 4. Cross-exchange opportunities
+	const crossEventOpps = analyzeCrossExchangeEventOpportunities(eventClusters);
+	if (crossEventOpps.length > 0) {
+		console.log('\x1b[35mCROSS-EXCHANGE EVENT OPPORTUNITIES\x1b[0m');
+		console.log(line());
+		for (const opp of crossEventOpps) {
+			console.log(`  [${opp.exchanges.join(' vs ')}] ${opp.event}: ${opp.details}`);
+			console.log('    Markets A:');
+			for (const m of opp.marketsA) {
+				console.log(`      - ${m.title || m.question}`);
+			}
+			console.log('    Markets B:');
+			for (const m of opp.marketsB) {
+				console.log(`      - ${m.title || m.question}`);
+			}
+			console.log('');
+		}
+	} else {
+		console.log('\x1b[90mNo cross-exchange event opportunities found.\x1b[0m\n');
+	}
+
+	// --- Fetch unified event calendar (automatic, from all sources) ---
+	// (already declared above)
 
 	// Normalize events to EventGroup[] for anticipation algorithm
 	const eventGroups: EventGroup[] = events.map((e: any, idx: number) => ({
@@ -714,11 +841,34 @@ async function main() {
 	}));
 
 	// Run anticipation algorithm
+
 	const anticipationResults = analyzeAnticipationOpportunities(eventGroups, calendar, { anticipationWindowDays: 10, debug: false });
-	if (anticipationResults.length > 0) {
+	const anticipationTrades = anticipationResults.filter(r => r.type === 'ANTICIPATION_TRADE');
+	const anticipationWatchlist = anticipationResults.filter(r => r.type === 'ANTICIPATION_WATCHLIST');
+
+	if (anticipationTrades.length > 0) {
+		console.log('\x1b[32mANTICIPATION TRADES\x1b[0m');
+		console.log(line());
+		anticipationTrades.forEach((r) => {
+			console.log(`  [${r.priority}] Score: ${r.score} | Event: ${r.calendarEvent}`);
+			console.log(`    Market: ${r.market}`);
+			console.log(`    Group: ${r.eventGroup}`);
+			console.log(`    Days to event: ${r.daysToEvent}`);
+			console.log(`    Direction: ${r.direction || ''}`);
+			if (r.entryPrice !== undefined) console.log(`    Entry: ${(r.entryPrice * 100).toFixed(1)}%`);
+			if (r.tp !== undefined) console.log(`    TP: ${(r.tp * 100).toFixed(1)}%`);
+			if (r.sl !== undefined) console.log(`    SL: ${(r.sl * 100).toFixed(1)}%`);
+			console.log(`    Reason: ${r.reason}`);
+			console.log('');
+		});
+	} else {
+		console.log('\x1b[90mNo anticipation trade signals found.\x1b[0m\n');
+	}
+
+	if (anticipationWatchlist.length > 0) {
 		console.log('\x1b[35mANTICIPATION WATCHLIST\x1b[0m');
 		console.log(line());
-		anticipationResults.forEach((r) => {
+		anticipationWatchlist.forEach((r) => {
 			console.log(`  [${r.priority}] Score: ${r.score} | Event: ${r.calendarEvent}`);
 			console.log(`    Market: ${r.market}`);
 			console.log(`    Group: ${r.eventGroup}`);
@@ -767,11 +917,22 @@ function inferTagsFromTitle(title: string): string[] {
 	console.log('');
 	avoids.forEach(printResult);
 
-	// Cross-market arbitrage detection (Polymarket only for now)
-	if (exchange === 'polymarket') {
+	// Cross-market arbitrage detection (Polymarket and Manifold)
+	if (exchange === 'polymarket' || exchange === 'manifold') {
 		const arbSignals = analyzeCrossMarketArb(events);
 		if (arbSignals.length > 0) {
-			console.log('\x1b[35mCROSS-MARKET ARBITRAGE SIGNALS\x1b[0m');
+			// Add each arbitrage signal as a TRADE to the main trades list
+			for (const sig of arbSignals) {
+				trades.push({
+					action: 'TRADE',
+					type: 'CROSS_MARKET_ARB',
+					message: sig.message,
+					marketA: sig.marketA,
+					marketB: sig.marketB,
+					confidenceScore: 1, // or compute a score if desired
+				});
+			}
+			console.log('\x1b[35mCROSS-MARKET ARBITRAGE SIGNALS (added to TRADE list)\x1b[0m');
 			console.log(line());
 			for (const sig of arbSignals) {
 				console.log(`  ${sig.message}`);
