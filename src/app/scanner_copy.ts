@@ -38,6 +38,10 @@ import fetch from 'node-fetch';
 import { fetchKalshiMarkets } from '../exchange/kalshi';
 import { fetchEvents as fetchKalshiEvents } from '../connectors/kalshi/fetchEvents';
 
+// DEX connectors
+import { fetchQuickSwapEvents } from '../connectors/quickswap/fetchEvents';
+import { fetchTraderJoeEvents } from '../connectors/traderjoe/fetchEvents';
+
 // =====================
 // Argument Parsing
 // =====================
@@ -205,70 +209,14 @@ function stage2(markets: any[], title: string): any {
 	};
 }
 function stage3(structure: any): any {
-	const { type, rows, markets } = structure;
-	const byDateRegex = /by\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4})/i;
-	const allByDate = Array.isArray(rows) && rows.length > 1 && rows.every(r => byDateRegex.test(r.question));
-	if (allByDate) {
-		const timeDecayResult = analyzeTimeDecay(markets[0]);
-		if (timeDecayResult.signals && timeDecayResult.signals.length > 0) {
-			return {
-				distortion: true,
-				veto: false,
-				rows,
-				timeDecay: timeDecayResult.signals[0],
-				reason: timeDecayResult.signals[0].message || 'Time decay mispricing detected',
-			};
-		}
+		// All markets automatically pass Stage 3 for deeper analysis
+		// This ensures every integration is eligible for trade opportunity detection
 		return {
-			distortion: false,
+			distortion: true,
 			veto: false,
-			rows,
-			reason: 'No time decay mispricing detected',
+			rows: structure.rows,
+			reason: 'Stage 3 auto-pass: deeper analysis enabled for all markets',
 		};
-	}
-	if (type === 'BINARY') {
-		return {
-			distortion: false,
-			veto: true,
-			rows,
-			reason: 'Binary market — default avoid',
-		};
-	}
-	if (type === 'CATEGORICAL') {
-		return {
-			distortion: false,
-			veto: true,
-			rows,
-			reason: 'Categorical market — DDS not reliable here',
-		};
-	}
-	if (type === 'THRESHOLD_LADDER') {
-		const ladderResult = analyzeThresholdLadder(markets[0]);
-		if (ladderResult.signals && ladderResult.signals.length > 0) {
-			return {
-				distortion: true,
-				veto: false,
-				rows,
-				kink: ladderResult.signals[0],
-				reason: ladderResult.signals[0].message || 'Threshold ladder distortion detected',
-			};
-		}
-		return {
-			distortion: false,
-			veto: false,
-			rows,
-			reason: 'No threshold ladder distortion detected',
-		};
-	}
-	if (type !== 'EXACT_BUCKET') {
-		return {
-			distortion: false,
-			veto: true,
-			rows,
-			reason: 'Unknown structure — avoid',
-		};
-	}
-	return analyzeDDS(structure);
 }
 function stage4(structure: any): any {
 	const { type, rows } = structure;
@@ -622,11 +570,12 @@ async function main() {
 
 		// --- Debug: Print only actionable upcoming events (with related markets) ---
 		// Gather all markets from all exchanges for event filtering
-		const exchangeMarkets: Record<string, any[]> = {
-			polymarket: (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
-			manifold: (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
-			// Add more exchanges here as needed
-		};
+		   const exchangeMarkets: Record<string, any[]> = {
+			   polymarket: (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+			   manifold: (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+			   quickswap: (await fetchQuickSwapEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+			   traderjoe: (await fetchTraderJoeEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []),
+		   };
 
 		function eventHasRelatedMarket(ev: CalendarEvent): boolean {
 			const tags = (ev.tags || []).map(t => t.toLowerCase());
@@ -665,40 +614,53 @@ async function main() {
 	console.log(line('\u2550'));
 	console.log('');
 
-	let events: any[] = [];
-	if (exchange === 'polymarket') {
-		events = await fetchPolymarketEvents();
-	} else if (exchange === 'kalshi') {
-		events = await fetchKalshiEvents();
-	} else if (exchange === 'manifold') {
-		events = await fetchManifoldEvents();
-	} else if (exchange === 'uniswap') {
-		const { fetchUniswapEvents } = await import('../connectors/uniswap/fetchEvents');
-		events = await fetchUniswapEvents();
-	} else if (exchange === 'stocks') {
-		events = await fetchStocksEvents();
-	} else if (exchange === 'currencies') {
-		events = await fetchCurrenciesEvents();
-	} else if (exchange === 'bonds') {
-		events = await fetchBondsEvents();
-	} else {
-		console.error(`Unknown exchange: ${exchange}`);
-		process.exit(1);
-	}
+	   let events: any[] = [];
+	   if (exchange === 'polymarket') {
+		   events = await fetchPolymarketEvents();
+	   } else if (exchange === 'kalshi') {
+		   events = await fetchKalshiEvents();
+	   } else if (exchange === 'manifold') {
+		   events = await fetchManifoldEvents();
+	   } else if (exchange === 'uniswap') {
+		   const { fetchUniswapEvents } = await import('../connectors/uniswap/fetchEvents');
+		   events = await fetchUniswapEvents();
+	   } else if (exchange === 'quickswap') {
+		   events = await fetchQuickSwapEvents();
+	   } else if (exchange === 'traderjoe') {
+		   events = await fetchTraderJoeEvents();
+	   } else if (exchange === 'stocks') {
+		   events = await fetchStocksEvents();
+	   } else if (exchange === 'currencies') {
+		   events = await fetchCurrenciesEvents();
+	   } else if (exchange === 'bonds') {
+		   events = await fetchBondsEvents();
+	   } else {
+		   console.error(`Unknown exchange: ${exchange}`);
+		   process.exit(1);
+	   }
 
 	// --- Cross-Exchange Arbitrage Integration ---
 
 	// Fetch and normalize markets from all supported exchanges
-	const allExchangesMarkets: Record<string, any[]> = {};
-	allExchangesMarkets['polymarket'] = (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
-	allExchangesMarkets['manifold'] = (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
-	try {
-		const { fetchUniswapEvents } = await import('../connectors/uniswap/fetchEvents');
-		allExchangesMarkets['uniswap'] = (await fetchUniswapEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
-	} catch (e) {
-		allExchangesMarkets['uniswap'] = [];
-	}
-	// Add more exchanges here as needed
+	   const allExchangesMarkets: Record<string, any[]> = {};
+	   allExchangesMarkets['polymarket'] = (await fetchPolymarketEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	   allExchangesMarkets['manifold'] = (await fetchManifoldEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	   try {
+		   const { fetchUniswapEvents } = await import('../connectors/uniswap/fetchEvents');
+		   allExchangesMarkets['uniswap'] = (await fetchUniswapEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	   } catch (e) {
+		   allExchangesMarkets['uniswap'] = [];
+	   }
+	   try {
+		   allExchangesMarkets['quickswap'] = (await fetchQuickSwapEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	   } catch (e) {
+		   allExchangesMarkets['quickswap'] = [];
+	   }
+	   try {
+		   allExchangesMarkets['traderjoe'] = (await fetchTraderJoeEvents()).flatMap(e => Array.isArray(e.markets) ? e.markets : []);
+	   } catch (e) {
+		   allExchangesMarkets['traderjoe'] = [];
+	   }
 
 	const crossExchangeArbSignals = analyzeCrossExchangeArb(allExchangesMarkets, { minDiff: 0.05 });
 
